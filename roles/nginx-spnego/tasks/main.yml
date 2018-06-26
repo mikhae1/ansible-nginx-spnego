@@ -1,0 +1,136 @@
+---
+
+- set_fact:
+    nginx_src_path: "{{ nginx_path }}/src/{{ nginx_version }}"
+
+- name: install nginx dependencies
+  yum:
+    name: "{{ item }}"
+    state: present
+  with_items:
+    # nginx core dependencies
+    - openssl-devel
+    - zlib-devel
+    - pcre-devel
+    - git-core
+    - gcc-c++
+    - make
+    # extra for dynamic modules
+    - libxslt-devel
+    - libxml2-devel
+    - gd-devel
+    - GeoIP-devel
+    - perl-ExtUtils-Embed
+    - gperftools-devel
+    # kerberos
+    - bind-utils
+    - krb5-workstation
+    - samba-common
+    - samba-common-tools
+
+- name: add user {{ nginx_user }}
+  user:
+    name: "{{ nginx_user }}"
+    shell: /sbin/nologin
+    system: yes
+    createhome: no
+
+- name: prepare {{ nginx_path }} path
+  file:
+    state: directory
+    path: "{{ item }}"
+    owner: "{{ nginx_user }}"
+    group: "{{ nginx_group }}"
+  with_items:
+    - "{{ nginx_path }}"
+    - "{{ nginx_path }}/src"
+
+- name: download nginx {{ nginx_version }} sources
+  unarchive:
+    src: "{{ nginx_url }}"
+    dest: "{{ nginx_path }}/src"
+    remote_src: yes
+    owner: "{{ nginx_user }}"
+    group: "{{ nginx_group }}"
+
+# FIXME: try different dir with git module
+- name: clone spnego-http-auth-nginx module
+  become_user: "{{ nginx_user }}"
+  git:
+    repo: "{{ nginx_spnego_repo }}"
+    dest: "{{ nginx_src_path }}/spnego-http-auth-nginx-module"
+
+- name: create configuration directory
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ nginx_user }}"
+    group: "{{ nginx_group }}"
+  with_items:
+    - "{{ nginx_conf_dir }}"
+    - "{{ nginx_conf_dir }}/conf.d"
+
+- name: configure nginx with custom modules
+  become_user: "{{ nginx_user }}"
+  command: >
+    ./configure
+      --build=nginx-spnego
+
+      --prefix={{ nginx_path }}
+
+      --sbin-path={{ nginx_sbin_path }}
+      --conf-path={{ nginx_conf_dir }}/nginx.conf
+      --modules-path={{ nginx_modules_path }}
+      --error-log-path={{ nginx_log_dir }}/error.log
+      --http-log-path={{ nginx_log_dir }}/access.log
+      --pid-path={{ nginx_pid_path }}
+      --lock-path={{ nginx_lock_path }}
+
+      --user={{ nginx_user }}
+      --group={{ nginx_group }}
+
+      --with-cc-opt='-O2 -g -pipe -Wall -Wp,-D_FORTIFY_SOURCE=2 -fexceptions -fstack-protector-strong --param=ssp-buffer-size=4 -grecord-gcc-switches -m64 -mtune=generic -fPIC'
+      --with-ld-opt='-Wl,-z,relro -Wl,-z,now -pie'
+
+      --add-module=spnego-http-auth-nginx-module
+
+      {{ nginx_build_params | join(' ') }}
+  args:
+    chdir: "{{ nginx_src_path }}"
+
+- name: build nginx
+  become_user: "{{ nginx_user }}"
+  command: make
+  args:
+    chdir: "{{ nginx_src_path }}"
+
+- name: install nginx
+  command: make install
+  args:
+    chdir: "{{ nginx_src_path }}"
+
+- name: install nginx-spnego systemd script
+  template:
+    src: systemd/nginx-spnego.service.j2
+    dest: /etc/systemd/system/nginx-spnego.service
+  notify: restart nginx
+
+- name: install nginx configuration
+  template:
+    src: nginx/nginx.conf.j2
+    dest: "{{ nginx_conf_dir }}/nginx.conf"
+    validate: "{{ nginx_sbin_path }} -t -c %s"
+  notify: restart nginx
+  tags: configure
+
+# Flush handlers before ensuring the service is started to prevent
+# a start and then restart
+- name: flush handlers to apply immediate restart
+  meta: flush_handlers
+
+- name: ensure service is running and enabled
+  systemd:
+    enabled: yes
+    daemon_reload: yes
+    state: started
+    name: nginx-spnego

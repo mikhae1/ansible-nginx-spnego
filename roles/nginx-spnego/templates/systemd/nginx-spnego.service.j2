@@ -1,0 +1,16 @@
+[Unit]
+Description=nginx with spnego module
+Documentation=http://nginx.org/en/docs/
+After=network-online.target remote-fs.target nss-lookup.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+PIDFile={{ nginx_pid_path }}
+ExecStartPre={{ nginx_sbin_path }} -t -c {{ nginx_conf_dir }}/nginx.conf
+ExecStart={{ nginx_sbin_path }} -c {{ nginx_conf_dir }}/nginx.conf
+ExecReload=/bin/kill -s HUP $MAINPID
+ExecStop=/bin/kill -s TERM $MAINPID
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,38 @@
+# For more information on configuration, see:
+#   * Official English Documentation: http://nginx.org/en/docs/
+#   * Official Russian Documentation: http://nginx.org/ru/docs/
+
+# NB: nginx user must have access to keytab file
+user {{ nginx_user }};
+
+worker_processes auto;
+
+error_log {{ nginx_log_dir }}/error.log;
+pid {{ nginx_pid_path }};
+
+# load dynamic modules
+include /usr/share/nginx/modules/*.conf;
+
+events {
+  worker_connections 1024;
+}
+
+http {
+  log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+
+  access_log  {{ nginx_log_dir }}/access.log  main;
+
+  sendfile            on;
+  tcp_nopush          on;
+  tcp_nodelay         on;
+  keepalive_timeout   65;
+  types_hash_max_size 2048;
+
+  include             {{ nginx_conf_dir }}/mime.types;
+  default_type        application/octet-stream;
+
+  # load custom config files
+  include {{ nginx_conf_dir }}/conf.d/*.conf;
+}
